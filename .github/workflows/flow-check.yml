@@ -19,6 +19,9 @@ on:
 jobs:
   flow-check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
       has_code: ${{ steps.detect-code.outputs.has_code }}
       allowed: ${{ steps.branch-flow.outputs.allowed }}
