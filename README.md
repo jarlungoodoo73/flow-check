@@ -73,4 +73,4 @@ jobs:
 
 ## Melhorias de Performance
 
-O workflow reutilizável inclui otimizações de caching para melhorar a performance das execuções subsequentes
+O repositório inclui um workflow de CI que valida os arquivos YAML e utiliza caching para otimizar o tempo de execução em builds subsequentes. O caching é aplicado ao binário yq usado na validação.

@@ -8,37 +8,32 @@ on:
       - main
 
 jobs:
-  test-action:
+  validate-yaml:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (for caching demo)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
-        continue-on-error: true  # In case there's no package-lock.json
-
-      - name: Cache shell dependencies
+      - name: Cache yq binary
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache
-          key: ${{ runner.os }}-shell-deps-${{ hashFiles('**/*.sh') }}
+          path: /usr/local/bin/yq
+          key: ${{ runner.os }}-yq-${{ hashFiles('.github/workflows/*.yml') }}
           restore-keys: |
-            ${{ runner.os }}-shell-deps-
+            ${{ runner.os }}-yq-
 
-      - name: Test action syntax
+      - name: Install yq for YAML validation
         run: |
-          # Verify action.yml is valid YAML
           if ! command -v yq &> /dev/null; then
             echo "Installing yq for YAML validation"
             sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
             sudo chmod +x /usr/local/bin/yq
+          else
+            echo "✓ yq is already installed"
           fi
+
+      - name: Validate action.yml syntax
+        run: |
           yq eval '.' action.yml > /dev/null
           echo "✓ action.yml is valid YAML"
 
@@ -51,29 +46,3 @@ jobs:
               echo "✓ $workflow is valid YAML"
             fi
           done
-
-  lint-shell-scripts:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Cache ShellCheck
-        uses: actions/cache@v4
-        with:
-          path: ~/shellcheck
-          key: ${{ runner.os }}-shellcheck-v0.9.0
-          restore-keys: |
-            ${{ runner.os }}-shellcheck-
-
-      - name: Run ShellCheck
-        run: |
-          # Extract and check shell scripts from action.yml
-          echo "Checking shell scripts in action.yml..."
-          # Note: The scripts are embedded in YAML, so we'll just verify
-          # that the action.yml can be parsed
-          if command -v shellcheck &> /dev/null; then
-            echo "✓ ShellCheck is available"
-          else
-            echo "ShellCheck not available, skipping detailed shell script linting"
-          fi

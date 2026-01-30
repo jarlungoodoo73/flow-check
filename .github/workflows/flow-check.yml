@@ -53,10 +53,6 @@ jobs:
           PAGE=1
           HAS_CODE="false"
 
-          # Create cache key based on PR head SHA
-          CACHE_KEY="pr-files-${{ github.event.pull_request.head.sha }}"
-          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
-
           while :; do
             RESP="$(
               curl -sS \
