@@ -16,6 +16,8 @@ Expondo as saídas:
 
 ## Uso
 
+### Opção 1: Workflow Reutilizável (Recomendado)
+
 No repositório que contém as PRs:
 
 ```yaml
@@ -38,3 +40,37 @@ jobs:
       head_branch: ${{ needs.flow-check.outputs.head_branch }}
       pr_number: ${{ github.event.pull_request.number }}
       changed_files: ${{ github.event.pull_request.changed_files }}
+```
+
+### Opção 2: Composite Action
+
+Caso prefira usar como composite action:
+
+```yaml
+name: "PR flow"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  flow-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Flow Check
+        id: flow-check
+        uses: SEU_USUARIO/flow-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Use outputs
+        run: |
+          echo "has_code: ${{ steps.flow-check.outputs.has_code }}"
+          echo "allowed: ${{ steps.flow-check.outputs.allowed }}"
+          echo "head_branch: ${{ steps.flow-check.outputs.head_branch }}"
+          echo "base_branch: ${{ steps.flow-check.outputs.base_branch }}"
+```
+
+## Melhorias de Performance
+
+O repositório inclui um workflow de CI que valida os arquivos YAML e utiliza caching para otimizar o tempo de execução em builds subsequentes. O caching é aplicado ao binário yq usado na validação.

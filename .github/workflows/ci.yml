@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-yaml:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache yq binary
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/yq
+          key: ${{ runner.os }}-yq-${{ hashFiles('.github/workflows/*.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-yq-
+
+      - name: Install yq for YAML validation
+        run: |
+          if ! command -v yq &> /dev/null; then
+            echo "Installing yq for YAML validation"
+            sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+            sudo chmod +x /usr/local/bin/yq
+          else
+            echo "✓ yq is already installed"
+          fi
+
+      - name: Validate action.yml syntax
+        run: |
+          yq eval '.' action.yml > /dev/null
+          echo "✓ action.yml is valid YAML"
+
+      - name: Validate workflow files
+        run: |
+          for workflow in .github/workflows/*.yml; do
+            if [ -f "$workflow" ]; then
+              echo "Validating $workflow"
+              yq eval '.' "$workflow" > /dev/null
+              echo "✓ $workflow is valid YAML"
+            fi
+          done
