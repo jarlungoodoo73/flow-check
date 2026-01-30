@@ -1,0 +1,232 @@
+name: Flow Check
+
+on:
+  workflow_call:
+    outputs:
+      has_code:
+        description: "Indica se a PR contém alterações de código"
+        value: ${{ jobs.flow-check.outputs.has_code }}
+      allowed:
+        description: "Indica se o fluxo de branches é permitido (dev → staging → main)"
+        value: ${{ jobs.flow-check.outputs.allowed }}
+      head_branch:
+        description: "Nome da branch de origem da PR"
+        value: ${{ jobs.flow-check.outputs.head_branch }}
+      base_branch:
+        description: "Nome da branch de destino da PR"
+        value: ${{ jobs.flow-check.outputs.base_branch }}
+
+jobs:
+  flow-check:
+    runs-on: ubuntu-latest
+    outputs:
+      has_code: ${{ steps.detect-code.outputs.has_code }}
+      allowed: ${{ steps.branch-flow.outputs.allowed }}
+      head_branch: ${{ steps.branch-flow.outputs.head_branch }}
+      base_branch: ${{ steps.branch-flow.outputs.base_branch }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect code changes
+        id: detect-code
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          CODE_EXTENSIONS="
+          .js .jsx .ts .tsx
+          .java .kt .kts
+          .py .rb .go
+          .php .cs
+          .c .cpp .h .hpp
+          .rs .swift
+          .sql
+          .sh .bash .ps1
+          "
+
+          PER_PAGE=100
+          PAGE=1
+          HAS_CODE="false"
+
+          # Create cache key based on PR head SHA
+          CACHE_KEY="pr-files-${{ github.event.pull_request.head.sha }}"
+          echo "cache_key=$CACHE_KEY" >> $GITHUB_OUTPUT
+
+          while :; do
+            RESP="$(
+              curl -sS \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/files?per_page=$PER_PAGE&page=$PAGE"
+            )"
+
+            FILES_COUNT="$(printf '%s\n' "$RESP" | jq 'length')"
+
+            if [ "$FILES_COUNT" -eq 0 ]; then
+              break
+            fi
+
+            FILENAMES="$(printf '%s\n' "$RESP" | jq -r '.[].filename')"
+
+            while IFS= read -r FILE; do
+              if [ -z "$FILE" ]; then
+                continue
+              fi
+              for EXT in $CODE_EXTENSIONS; do
+                case "$FILE" in
+                  *"$EXT")
+                    HAS_CODE="true"
+                    break 3
+                    ;;
+                esac
+              done
+            done <<< "$FILENAMES"
+
+            if [ "$FILES_COUNT" -lt "$PER_PAGE" ]; then
+              break
+            fi
+
+            PAGE=$((PAGE + 1))
+          done
+
+          {
+            echo "has_code=$HAS_CODE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate branch flow
+        id: branch-flow
+        env:
+          HAS_CODE: ${{ steps.detect-code.outputs.has_code }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          DEV_BRANCHES="dev develop development"
+          STAGE_BRANCHES="staging stage hm hom homol homolog homologation homologacao"
+          MAIN_BRANCHES="$DEFAULT_BRANCH main master prd prod production producao"
+
+          base_is_dev="false"
+          for B in $DEV_BRANCHES; do
+            if [ "$BASE_BRANCH" = "$B" ]; then
+              base_is_dev="true"
+              break
+            fi
+          done
+
+          base_is_stage="false"
+          for B in $STAGE_BRANCHES; do
+            if [ "$BASE_BRANCH" = "$B" ]; then
+              base_is_stage="true"
+              break
+            fi
+          done
+
+          base_is_main="false"
+          for B in $MAIN_BRANCHES; do
+            if [ "$BASE_BRANCH" = "$B" ]; then
+              base_is_main="true"
+              break
+            fi
+          done
+
+          head_is_dev="false"
+          for B in $DEV_BRANCHES; do
+            if [ "$HEAD_BRANCH" = "$B" ]; then
+              head_is_dev="true"
+              break
+            fi
+          done
+
+          head_is_stage="false"
+          for B in $STAGE_BRANCHES; do
+            if [ "$HEAD_BRANCH" = "$B" ]; then
+              head_is_stage="true"
+              break
+            fi
+          done
+
+          ALLOWED="true"
+
+          if [ "$base_is_main" = "true" ]; then
+            if [ "$head_is_stage" != "true" ]; then
+              ALLOWED="false"
+            fi
+          elif [ "$base_is_stage" = "true" ]; then
+            if [ "$head_is_dev" != "true" ]; then
+              ALLOWED="false"
+            fi
+          fi
+
+          {
+            echo "allowed=$ALLOWED"
+            echo "head_branch=$HEAD_BRANCH"
+            echo "base_branch=$BASE_BRANCH"
+            echo "default_branch=$DEFAULT_BRANCH"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build PR comment message
+        id: build-pr-message
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          HAS_CODE: ${{ steps.detect-code.outputs.has_code }}
+          ALLOWED: ${{ steps.branch-flow.outputs.allowed }}
+          HEAD_BRANCH: ${{ steps.branch-flow.outputs.head_branch }}
+          BASE_BRANCH: ${{ steps.branch-flow.outputs.base_branch }}
+          DEFAULT_BRANCH: ${{ steps.branch-flow.outputs.default_branch }}
+        run: |
+          set -euo pipefail
+
+          HEADER_ACTOR="${GITHUB_ACTOR}"
+          HEADER_TITLE="🔀 flow-check"
+          HEADER_SUBJECT="Fluxo de branches e alterações de código"
+
+          if [ "$HAS_CODE" = "true" ] && [ "$ALLOWED" = "true" ]; then
+            BODY_MESSAGE="✅ Fluxo de branches permitido e alterações de código detectadas nesta Pull Request."
+            BODY_SCOPE="- head: \`${HEAD_BRANCH}\`\n- base: \`${BASE_BRANCH}\`\n- default: \`${DEFAULT_BRANCH}\`\n- has_code: \`${HAS_CODE}\`\n- allowed: \`${ALLOWED}\`"
+            FOOTER_RESULT="Fluxo permitido para esta Pull Request."
+            FOOTER_ADVISE="Continue com as validações e revisões habituais."
+          elif [ "$HAS_CODE" = "true" ] && [ "$ALLOWED" != "true" ]; then
+            BODY_MESSAGE="⛔ Fluxo de branches não permitido para esta Pull Request com alterações de código."
+            BODY_SCOPE="- head: \`${HEAD_BRANCH}\`\n- base: \`${BASE_BRANCH}\`\n- default: \`${DEFAULT_BRANCH}\`\n- has_code: \`${HAS_CODE}\`\n- allowed: \`${ALLOWED}\`\n- regra: dev → staging → main"
+            FOOTER_RESULT="Fluxo não permitido para esta Pull Request."
+            FOOTER_ADVISE="Ajuste a origem/destino para respeitar o fluxo dev → staging → main antes de prosseguir."
+          else
+            BODY_MESSAGE="🟡 Nenhuma alteração de código foi detectada nos arquivos desta Pull Request."
+            BODY_SCOPE="- head: \`${HEAD_BRANCH}\`\n- base: \`${BASE_BRANCH}\`\n- default: \`${DEFAULT_BRANCH}\`\n- has_code: \`${HAS_CODE}\`\n- allowed: \`${ALLOWED}\`"
+            FOOTER_RESULT="Nenhuma alteração de código detectada."
+            FOOTER_ADVISE="O fluxo de branches não será bloqueado por este check, mas outras validações ainda podem se aplicar."
+          fi
+
+          BODY_TODO=""
+
+          {
+            echo "header_actor=$HEADER_ACTOR"
+            echo "header_title=$HEADER_TITLE"
+            echo "header_subject=$HEADER_SUBJECT"
+            printf 'body_message<<EOF\n%s\nEOF\n' "$BODY_MESSAGE"
+            printf 'body_scope<<EOF\n%s\nEOF\n' "$BODY_SCOPE"
+            printf 'body_todo<<EOF\n%s\nEOF\n' "$BODY_TODO"
+            echo "footer_result=$FOOTER_RESULT"
+            echo "footer_advise=$FOOTER_ADVISE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post PR comment
+        uses: Malnati/pr-comment@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pr_number: ${{ github.event.pull_request.number }}
+          header_actor: ${{ steps.build-pr-message.outputs.header_actor }}
+          header_title: ${{ steps.build-pr-message.outputs.header_title }}
+          header_subject: ${{ steps.build-pr-message.outputs.header_subject }}
+          body_message: ${{ steps.build-pr-message.outputs.body_message }}
+          body_scope: ${{ steps.build-pr-message.outputs.body_scope }}
+          body_todo: ${{ steps.build-pr-message.outputs.body_todo }}
+          footer_result: ${{ steps.build-pr-message.outputs.footer_result }}
+          footer_advise: ${{ steps.build-pr-message.outputs.footer_advise }}
